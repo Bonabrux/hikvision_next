@@ -1,6 +1,6 @@
 # Hikvision Next
 
-![GitHub release (latest by date)](https://img.shields.io/github/v/release/maciej-or/hikvision_next?style=flat-square) [![hacs_badge](https://img.shields.io/badge/HACS-Default-orange.svg)](https://github.com/hacs/integration)
+![GitHub release (latest by date)](https://img.shields.io/github/v/release/Bonabrux/hikvision_next?style=flat-square) [![hacs_badge](https://img.shields.io/badge/HACS-Default-orange.svg)](https://github.com/hacs/integration)
 
 The Home Assistant integration for Hikvision NVRs, IP cameras and security control panels (SecurityCP). Receives and switches detection of alarm events. Provides video streams.
 
