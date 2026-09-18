@@ -93,6 +93,15 @@ async def _async_get_diagnostics(
         "Streaming/channels",
     ]
 
+    if device.device_info.is_security_panel:
+        endpoints += [
+            "SecurityCP/capabilities",
+            "SecurityCP/Configuration/subSys",
+            "SecurityCP/status/subSystems",
+            "SecurityCP/Configuration/zones",
+            "SecurityCP/status/zones",
+        ]
+
     for endpoint in endpoints:
         responses[endpoint] = await get_isapi_data(device, endpoint)
 
@@ -115,7 +124,11 @@ async def get_isapi_data(isapi, endpoint: str) -> dict:
     """Get data from ISAPI."""
     entry = {}
     try:
-        response = await isapi.request(GET, endpoint)
+        if endpoint.startswith("SecurityCP/"):
+            # SecurityCP only returns JSON, unlike the rest of ISAPI
+            response = await isapi._security_cp_request(GET, endpoint)  # noqa: SLF001
+        else:
+            response = await isapi.request(GET, endpoint)
         entry["response"] = anonymise_data(response)
     except (HTTPStatusError, ISAPIUnauthorizedError, ISAPIForbiddenError) as ex:
         entry["status_code"] = ex.response.status_code

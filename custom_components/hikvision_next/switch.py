@@ -25,27 +25,31 @@ async def async_setup_entry(
     """Add hikvision_next entities from a config_entry."""
 
     device = entry.runtime_data
-    events_coordinator = device.coordinators.get(EVENTS_COORDINATOR)
-    secondary_coordinator = device.coordinators.get(SECONDARY_COORDINATOR)
-
     entities = []
 
-    # Camera supported events
-    for camera in device.cameras:
-        for event in camera.events_info:
-            entities.append(EventSwitch(camera.id, event, events_coordinator))
+    # Security control panels have their own coordinator/platforms (alarm_control_panel,
+    # zone binary_sensor) and none of the NVR/camera concepts below (event switches,
+    # System/IO output ports, System/Holidays) apply to them.
+    if not device.device_info.is_security_panel:
+        events_coordinator = device.coordinators.get(EVENTS_COORDINATOR)
+        secondary_coordinator = device.coordinators.get(SECONDARY_COORDINATOR)
 
-    # Device supported events
-    for event in device.events_info:
-        entities.append(EventSwitch(0, event, events_coordinator))
+        # Camera supported events
+        for camera in device.cameras:
+            for event in camera.events_info:
+                entities.append(EventSwitch(camera.id, event, events_coordinator))
 
-    # Output port switch
-    for i in range(1, device.capabilities.output_ports + 1):
-        entities.append(NVROutputSwitch(events_coordinator, i))
+        # Device supported events
+        for event in device.events_info:
+            entities.append(EventSwitch(0, event, events_coordinator))
 
-    # Holiday mode switch
-    if device.capabilities.support_holiday_mode:
-        entities.append(HolidaySwitch(secondary_coordinator))
+        # Output port switch
+        for i in range(1, device.capabilities.output_ports + 1):
+            entities.append(NVROutputSwitch(events_coordinator, i))
+
+        # Holiday mode switch
+        if device.capabilities.support_holiday_mode:
+            entities.append(HolidaySwitch(secondary_coordinator))
 
     async_add_entities(entities)
 

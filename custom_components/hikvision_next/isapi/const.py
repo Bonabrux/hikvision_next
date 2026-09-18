@@ -87,3 +87,50 @@ EVENTS_ALTERNATE_ID = {
 }
 
 MUTEX_ALTERNATE_ID = {"motiondetection": "VMDHumanVehicle"}
+
+# Security control panel (SecurityCP) partition arming modes
+PARTITION_ARM_STAY: Final = "stay"
+PARTITION_ARM_AWAY: Final = "away"
+
+# Generic zone detector categories, mapped from SecurityCP zone "detectorType" values.
+# Kept HA-agnostic here; the integration layer maps these to BinarySensorDeviceClass.
+ZONE_CATEGORY_DOOR: Final = "door"
+ZONE_CATEGORY_MOTION: Final = "motion"
+ZONE_CATEGORY_SMOKE: Final = "smoke"
+ZONE_CATEGORY_GAS: Final = "gas"
+ZONE_CATEGORY_MOISTURE: Final = "moisture"
+ZONE_CATEGORY_HEAT: Final = "heat"
+ZONE_CATEGORY_SAFETY: Final = "safety"
+ZONE_CATEGORY_VIBRATION: Final = "vibration"
+ZONE_CATEGORY_TAMPER: Final = "tamper"
+
+ZONE_DETECTOR_CATEGORY = {
+    "magneticContact": ZONE_CATEGORY_DOOR,
+    "slimMagneticContact": ZONE_CATEGORY_DOOR,
+    "magnetShockDetector": ZONE_CATEGORY_DOOR,
+    "singleInfraredDetector": ZONE_CATEGORY_DOOR,
+    "passiveInfraredDetector": ZONE_CATEGORY_MOTION,
+    "curtainInfraredDetector": ZONE_CATEGORY_MOTION,
+    "indoorDualTechnologyDetector": ZONE_CATEGORY_MOTION,
+    "dualTechnologyPirDetector": ZONE_CATEGORY_MOTION,
+    "tripleTechnologyPirDetector": ZONE_CATEGORY_MOTION,
+    "activeInfraredDetector": ZONE_CATEGORY_MOTION,
+    "wirelessPIRCeilingDetector": ZONE_CATEGORY_MOTION,
+    "wirelessPIRCurtainDetector": ZONE_CATEGORY_MOTION,
+    "wirelessDTAMCurtainDetector": ZONE_CATEGORY_MOTION,
+    "outdoorDetector": ZONE_CATEGORY_MOTION,
+    "smokeDetector": ZONE_CATEGORY_SMOKE,
+    "wirelessSmokeDetector": ZONE_CATEGORY_SMOKE,
+    "combustibleGasDetector": ZONE_CATEGORY_GAS,
+    "wirelessCODetector": ZONE_CATEGORY_GAS,
+    "waterDetector": ZONE_CATEGORY_MOISTURE,
+    "waterLeakDetector": ZONE_CATEGORY_MOISTURE,
+    "humidityDetector": ZONE_CATEGORY_MOISTURE,
+    "glassBreakDetector": ZONE_CATEGORY_SAFETY,
+    "wirelessGlassBreakDetector": ZONE_CATEGORY_SAFETY,
+    "panicButton": ZONE_CATEGORY_SAFETY,
+    "vibrationDetector": ZONE_CATEGORY_VIBRATION,
+    "tamperDetector": ZONE_CATEGORY_TAMPER,
+    "wirelessHeatDetector": ZONE_CATEGORY_HEAT,
+    "temperatureDetector": ZONE_CATEGORY_HEAT,
+}

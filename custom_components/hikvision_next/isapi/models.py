@@ -90,6 +90,7 @@ class ISAPIDeviceInfo:
     ip_address: str = ""
     device_type: str = ""
     is_nvr: bool = False
+    is_security_panel: bool = False  # True for AX Hybrid/Hybrid PRO/PRO intrusion alarm panels
 
 
 @dataclass
@@ -105,6 +106,62 @@ class CapabilitiesInfo:
     support_event_mutex_checking: bool = False
     input_ports: int = 0
     output_ports: int = 0
+    partitions: int = 0  # number of partitions (areas) on a security control panel
+    zones: int = 0  # number of zones on a security control panel
+
+
+@dataclass
+class Partition:
+    """Holds info of a security control panel partition (area)."""
+
+    id: int
+    name: str
+    unique_id: str = None
+    enabled: bool = True
+    arming: str = "disarm"  # "stay", "away", "disarm", "arming"
+    alarm: bool = False
+    delay_time: int = 0
+
+
+@dataclass
+class Zone:
+    """Holds info of a security control panel zone."""
+
+    id: int
+    name: str
+    unique_id: str = None
+    partition_id: int = 0
+    detector_type: str = "other"
+    zone_type: str = "Instant"
+    status: str = "notRelated"  # online/offline/trigger/breakDown/heartbeatAbnormal
+    alarm: bool = False
+    bypassed: bool = False
+    tamper_evident: bool = False
+    armed: bool = False
+    charge: str = "normal"  # "normal"/"lowPower"
+    # Real-time open/closed state, only reported for magnetic contact (door/window)
+    # detectors. Confirmed against real hardware to be unreliable on some wireless
+    # zones (stuck at a fixed value regardless of actual open/close) -- kept only as an
+    # informational attribute; "status" == "trigger" is what actually drives the
+    # binary_sensor now (see coordinator._zone_is_triggered).
+    magnet_open_status: bool | None = None
+    # Telemetry only reported by wireless zones (battery-powered, RF-connected); wired
+    # zones don't return these fields at all.
+    charge_value: int | None = None  # remaining battery percentage, 0-100
+    signal: int | None = None  # RF signal quality/strength
+    temperature: int | None = None  # detector-reported temperature
+
+
+@dataclass
+class SecurityHostStatus:
+    """Holds security control panel host-level status (not specific to any zone/partition)."""
+
+    tamper_evident: bool = False  # panel cover/case open
+    ac_connected: bool = True  # mains (220V) power present
+    fault_count: int = 0  # total number of active faults reported by the panel
+    battery_status: str = "normal"  # "normal"/"lowPower"/"miss" (backup battery missing)
+    battery_percent: int | None = None
+    battery_voltage: float | None = None
 
 
 @dataclass

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import suppress
 import datetime
 from http import HTTPStatus
@@ -25,6 +26,7 @@ from .const import (
     EVENTS_ALTERNATE_ID,
     GET,
     MUTEX_ALTERNATE_ID,
+    PARTITION_ARM_AWAY,
     POST,
     PUT,
     STREAM_TYPE,
@@ -39,12 +41,20 @@ from .models import (
     IPCamera,
     ISAPIDeviceInfo,
     MutexIssue,
+    Partition,
     ProtocolsInfo,
+    SecurityHostStatus,
     StorageInfo,
+    Zone,
 )
-from .utils import bool_to_str, deep_get, parse_isapi_response, str_to_bool
+from .multipart_stream import MultipartStreamParser, extract_boundary
+from .utils import bool_to_str, deep_get, json_bool, parse_isapi_response, str_to_bool
 
 Node = dict[str, Any]
+
+# How long to wait for a single chunk (heartbeat or event) on the arming connection before
+# considering it stale and reconnecting.
+ARMING_IDLE_TIMEOUT = 90
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -80,6 +90,8 @@ class ISAPIClient:
         self.supported_events: list[EventInfo] = []
         self.storage: list[StorageInfo] = []
         self.protocols = ProtocolsInfo()
+        self.partitions: list[Partition] = []
+        self.zones: list[Zone] = []
         self.pending_initialization = False
 
     async def get_device_info(self):
@@ -113,6 +125,18 @@ class ISAPIClient:
         self.capabilities.input_ports = int(deep_get(capabilities, "SysCap.IOCap.IOInputPortNums", 0))
         self.capabilities.output_ports = int(deep_get(capabilities, "SysCap.IOCap.IOOutputPortNums", 0))
         self.capabilities.support_alarm_server = bool(await self.get_alarm_server())
+
+        security_cp_cap = (await self._security_cp_request(GET, "SecurityCP/capabilities")).get("SecurityCPCap")
+        if security_cp_cap:
+            self.device_info.is_security_panel = True
+            self.capabilities.partitions = int(security_cp_cap.get("partitionNum", 0))
+            self.capabilities.zones = int(security_cp_cap.get("localZoneNum", 0)) + int(
+                security_cp_cap.get("extendZoneNum", 0)
+            ) + int(security_cp_cap.get("wirelessZoneNum", 0))
+
+            self.partitions = await self.get_partitions()
+            self.zones = await self.get_zones()
+            return
 
         # Set if NVR based on whether more than 1 supported IP or analog cameras
         # Single IP camera will show 0 supported devices in total
@@ -394,6 +418,177 @@ class ISAPIClient:
                 return c
         return None
 
+    # --- Security control panel (SecurityCP): partitions (areas) and zones ---
+    # Unlike the rest of ISAPI, the SecurityCP namespace on AX Hybrid/Hybrid PRO panels
+    # only returns JSON: it does not have a usable default XML representation, so all
+    # SecurityCP requests explicitly ask for format=json and parse the body as JSON.
+
+    async def _security_cp_request(self, method: str, url: str, query: str = "") -> dict:
+        """Send a request to a SecurityCP/* endpoint and parse its JSON response."""
+        separator = "&" if "?" in url else "?"
+        extra = f"&{query}" if query else ""
+        full_url = f"{url}{separator}format=json{extra}"
+        response = await self.request(method, full_url, present="json")
+        return json.loads(response) if response else {}
+
+    @staticmethod
+    def _security_cp_list(data: dict) -> list[dict]:
+        """Extract the list of items from a SecurityCP JSON list response.
+
+        Different endpoints wrap the list under a generic "List" key or an
+        endpoint-specific one (e.g. "SubSysList", "ZoneList").
+        """
+        for value in data.values():
+            if isinstance(value, list):
+                return value
+        return []
+
+    async def get_partitions(self) -> list[Partition]:
+        """Get security control panel partitions (areas), combining configuration and status."""
+        config_data = await self._security_cp_request(GET, "SecurityCP/Configuration/subSys")
+        status_by_id = {p.id: p for p in await self.get_partitions_status()}
+
+        partitions = []
+        for wrapper in self._security_cp_list(config_data):
+            item = wrapper.get("SubSys", {})
+            partition_id = int(item.get("id"))
+            enabled = json_bool(item.get("enabled", True))
+            if not enabled:
+                # The panel always reports all possible partition slots (e.g. 16), regardless
+                # of how many are actually configured/in use -- skip the disabled ones rather
+                # than creating an alarm_control_panel entity for every unused slot.
+                continue
+
+            status_item = status_by_id.get(partition_id)
+            partitions.append(
+                Partition(
+                    id=partition_id,
+                    name=item.get("name") or f"Partition {partition_id}",
+                    enabled=enabled,
+                    arming=status_item.arming if status_item else "disarm",
+                    alarm=status_item.alarm if status_item else False,
+                    delay_time=status_item.delay_time if status_item else 0,
+                )
+            )
+        return partitions
+
+    async def get_partitions_status(self) -> list[Partition]:
+        """Get current arming/alarm status of all partitions (areas)."""
+        data = await self._security_cp_request(GET, "SecurityCP/status/subSystems")
+        partitions = []
+        for wrapper in self._security_cp_list(data):
+            item = wrapper.get("SubSys", {})
+            partitions.append(
+                Partition(
+                    id=int(item.get("id")),
+                    name=item.get("name") or f"Partition {item.get('id')}",
+                    enabled=json_bool(item.get("enabled", True)),
+                    arming=item.get("arming", "disarm"),
+                    alarm=json_bool(item.get("alarm", False)),
+                    delay_time=int(item.get("delayTime", 0)),
+                )
+            )
+        return partitions
+
+    def get_partition_by_id(self, partition_id: int) -> Partition | None:
+        """Get partition object by id."""
+        for partition in self.partitions:
+            if partition.id == partition_id:
+                return partition
+        return None
+
+    async def arm_partition(self, partition_id: int, mode: str = PARTITION_ARM_AWAY) -> None:
+        """Arm a partition (area). mode is 'stay' or 'away'."""
+        await self._security_cp_request(PUT, f"SecurityCP/control/arm/{partition_id}", f"ways={mode}")
+
+    async def disarm_partition(self, partition_id: int) -> None:
+        """Disarm a partition (area)."""
+        await self._security_cp_request(PUT, f"SecurityCP/control/disarm/{partition_id}")
+
+    async def clear_partition_alarm(self, partition_id: int) -> None:
+        """Clear a triggered alarm for a partition (area)."""
+        await self._security_cp_request(PUT, f"SecurityCP/control/clearAlarm/{partition_id}")
+
+    async def get_zones(self) -> list[Zone]:
+        """Get security control panel zones, combining configuration and status."""
+        config_data = await self._security_cp_request(GET, "SecurityCP/Configuration/zones")
+        status_by_id = {z.id: z for z in await self.get_zones_status()}
+
+        zones = []
+        for wrapper in self._security_cp_list(config_data):
+            item = wrapper.get("Zone", {})
+            zone_id = int(item.get("id"))
+            status_item = status_by_id.get(zone_id)
+            zones.append(
+                Zone(
+                    id=zone_id,
+                    name=item.get("zoneName") or f"Zone {zone_id}",
+                    partition_id=int(item.get("subSystemNo", 0)),
+                    detector_type=item.get("detectorType", "other"),
+                    zone_type=item.get("zoneType", "Instant"),
+                    status=status_item.status if status_item else "notRelated",
+                    alarm=status_item.alarm if status_item else False,
+                    bypassed=status_item.bypassed if status_item else False,
+                    tamper_evident=status_item.tamper_evident if status_item else False,
+                    armed=status_item.armed if status_item else False,
+                    charge=status_item.charge if status_item else "normal",
+                    magnet_open_status=status_item.magnet_open_status if status_item else None,
+                    charge_value=status_item.charge_value if status_item else None,
+                    signal=status_item.signal if status_item else None,
+                    temperature=status_item.temperature if status_item else None,
+                )
+            )
+        return zones
+
+    async def get_zones_status(self) -> list[Zone]:
+        """Get current status of all zones."""
+        data = await self._security_cp_request(GET, "SecurityCP/status/zones")
+        zones = []
+        for wrapper in self._security_cp_list(data):
+            item = wrapper.get("Zone", {})
+            magnet_open_status = item.get("magnetOpenStatus")
+            zones.append(
+                Zone(
+                    id=int(item.get("id")),
+                    name=item.get("name") or f"Zone {item.get('id')}",
+                    detector_type=item.get("detectorType", "other"),
+                    status=item.get("status", "notRelated"),
+                    alarm=json_bool(item.get("alarm", False)),
+                    bypassed=json_bool(item.get("bypassed", False)),
+                    tamper_evident=json_bool(item.get("tamperEvident", False)),
+                    armed=json_bool(item.get("armed", False)),
+                    charge=item.get("charge", "normal"),
+                    magnet_open_status=json_bool(magnet_open_status) if magnet_open_status is not None else None,
+                    charge_value=item.get("chargeValue"),
+                    signal=item.get("signal"),
+                    temperature=item.get("temperature"),
+                )
+            )
+        return zones
+
+    def get_zone_by_id(self, zone_id: int) -> Zone | None:
+        """Get zone object by id."""
+        for zone in self.zones:
+            if zone.id == zone_id:
+                return zone
+        return None
+
+    async def get_host_status(self) -> SecurityHostStatus:
+        """Get security control panel host-level status (AC power, battery, tamper, faults)."""
+        data = await self._security_cp_request(GET, "SecurityCP/status/host")
+        host_status = data.get("AlarmHostStatus", {}).get("HostStatus", {})
+        battery_list = data.get("AlarmHostStatus", {}).get("BatteryList", [])
+        battery = battery_list[0].get("Battery", {}) if battery_list else {}
+
+        return SecurityHostStatus(
+            tamper_evident=json_bool(host_status.get("tamperEvident", False)),
+            ac_connected=json_bool(host_status.get("ACConnect", True)),
+            fault_count=int(host_status.get("faultNum", 0)),
+            battery_status=battery.get("status", "normal"),
+            battery_percent=battery.get("percent"),
+            battery_voltage=battery.get("voltage"),
+        )
+
     async def get_storage_devices(self):
         """Get HDD and NAS storage devices."""
         storage_list = []
@@ -587,16 +782,19 @@ class ISAPIClient:
 
         data = await self.request(GET, "Event/notification/httpHosts")
         if not data:
+            _LOGGER.debug("get_alarm_server[%s]: Event/notification/httpHosts returned no data", self.host)
             return None
         host = self._get_event_notification_host(data)
 
-        return AlarmServer(
+        alarm_server = AlarmServer(
             ip_address=host.get("ipAddress"),
             port_no=int(host.get("portNo")),
             url=host.get("url"),
             protocol_type=host.get("protocolType"),
             host_name=host.get("hostName"),
         )
+        _LOGGER.debug("get_alarm_server[%s]: %s", self.host, alarm_server)
+        return alarm_server
 
     async def set_alarm_server(self, base_url: str, path: str) -> None:
         """Set event notifications listener server."""
@@ -604,6 +802,11 @@ class ISAPIClient:
         address = urlparse(base_url)
         data = await self.request(GET, "Event/notification/httpHosts")
         if not data:
+            _LOGGER.warning(
+                "set_alarm_server[%s]: Event/notification/httpHosts returned no data, cannot configure host %s",
+                self.host,
+                base_url,
+            )
             return
         host = self._get_event_notification_host(data)
 
@@ -619,6 +822,14 @@ class ISAPIClient:
             and host.get("portNo") == str(address.port)
             and host["url"] == path
         ):
+            _LOGGER.info(
+                "set_alarm_server[%s]: already configured to %s://%s:%s%s, no change needed",
+                self.host,
+                host["protocolType"],
+                old_address,
+                host.get("portNo"),
+                host["url"],
+            )
             return
         host["url"] = path
         host["protocolType"] = address.scheme.upper()
@@ -643,6 +854,14 @@ class ISAPIClient:
         host["httpAuthenticationMethod"] = "none"
 
         xml = xmltodict.unparse(data)
+        _LOGGER.info(
+            "set_alarm_server[%s]: updating notification host to %s://%s:%s%s",
+            self.host,
+            host["protocolType"],
+            address.hostname,
+            host["portNo"],
+            path,
+        )
         await self.request(PUT, "Event/notification/httpHosts", present="xml", data=xml)
 
     async def reboot(self):
@@ -650,14 +869,20 @@ class ISAPIClient:
         await self.request(PUT, "System/reboot", present="xml")
 
     @staticmethod
-    def parse_event_notification(xml: str) -> AlertInfo:
-        """Parse incoming EventNotificationAlert XML message."""
+    def parse_event_notification_raw(xml: str) -> Node:
+        """Parse EventNotificationAlert XML into a raw dict, without event-specific validation."""
 
         # Fix for some cameras sending non html encoded data
         xml = xml.replace("&", "&amp;")
 
         data = xmltodict.parse(xml)
-        alert = data["EventNotificationAlert"]
+        return data.get("EventNotificationAlert", {})
+
+    @staticmethod
+    def parse_event_notification(xml: str) -> AlertInfo:
+        """Parse incoming EventNotificationAlert XML message."""
+
+        alert = ISAPIClient.parse_event_notification_raw(xml)
 
         event_id = alert.get("eventType")
         if not event_id or event_id == "duration":
@@ -818,6 +1043,88 @@ class ISAPIClient:
                     yield chunk
         except httpx.HTTPError as ex:
             _LOGGER.warning("Failed request [%s] %s | %s", method, full_url, ex)
+
+    @staticmethod
+    def _decode_arming_part(data: bytes) -> str:
+        """Decode a single arming-stream part body, tolerating non-UTF-8 content.
+
+        Content-Type on these parts claims charset="UTF-8", but some panels/NVRs embed
+        user-configured strings (e.g. zone/partition names with accented characters) encoded
+        with the device's own locale codepage instead, breaking strict UTF-8 decoding. Latin-1
+        never raises (every byte maps to a code point), so it's used as a last-resort fallback
+        to avoid silently dropping the whole event just because one field's bytes are off.
+        """
+        try:
+            return data.decode("utf-8")
+        except UnicodeDecodeError:
+            return data.decode("latin-1")
+
+    async def open_arming_stream(self) -> AsyncIterator[Node]:
+        """Open an ISAPI "arming with subscription" connection and yield events as they arrive.
+
+        Security control panels (SecurityCP) don't support the generic ISAPI "listening mode"
+        (Event/notification/httpHosts) for their own zone/partition/CID events -- that
+        mechanism is only used by cameras/NVRs. Real-time delivery instead requires "arming":
+        keeping a persistent connection open and reacting as the device pushes multipart parts
+        (JSON or XML) down it, plus periodic heartbeats.
+
+        Uses "arming WITH subscription" (POST Event/notification/subscribeEvent) rather than
+        the simpler "without subscription" (GET Event/notification/alertStream): confirmed
+        against real hardware that the device's own SubscribeEventCap (GET
+        Event/notification/subscribeEventCap) is where it advertises cidEvent support, and
+        arm/disarm events only ever showed up on this POST-based connection during testing --
+        plain GET alertStream was never actually verified to deliver cidEvent traffic.
+        """
+        if not self._auth_method:
+            await self._detect_auth_method()
+
+        full_url = self.get_isapi_url("Event/notification/subscribeEvent")
+        timeout = httpx.Timeout(connect=self.timeout, read=None, write=self.timeout, pool=self.timeout)
+        body = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<SubscribeEvent version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema">'
+            "<heartbeat>6</heartbeat>"
+            "<eventMode>all</eventMode>"
+            "</SubscribeEvent>"
+        )
+
+        async with self._session.stream(
+            "POST",
+            full_url,
+            auth=self._auth_method,
+            timeout=timeout,
+            headers={"Connection": "keep-alive", "Content-Type": "application/xml"},
+            content=body,
+        ) as response:
+            response.raise_for_status()
+            boundary = extract_boundary(response.headers.get("content-type", ""))
+            if not boundary:
+                raise ValueError(f"subscribeEvent response has no multipart boundary: {response.headers}")
+
+            parser = MultipartStreamParser(boundary)
+            chunks = response.aiter_bytes().__aiter__()
+            while True:
+                try:
+                    chunk = await asyncio.wait_for(chunks.__anext__(), timeout=ARMING_IDLE_TIMEOUT)
+                except StopAsyncIteration:
+                    return
+
+                for headers, part_body in parser.feed(chunk):
+                    part_content_type = headers.get("content-type", "")
+                    try:
+                        if "json" in part_content_type:
+                            yield json.loads(self._decode_arming_part(part_body))
+                        elif "xml" in part_content_type:
+                            parsed = xmltodict.parse(self._decode_arming_part(part_body))
+                            if "SubscribeEventResponse" in parsed:
+                                # First message on the connection: subscription acknowledgment,
+                                # not an event -- nothing to act on.
+                                _LOGGER.debug("Arming subscription established: %s", parsed["SubscribeEventResponse"])
+                                continue
+                            yield parsed.get("EventNotificationAlert", {})
+                        # else: binary picture data etc. attached to the event -- ignore
+                    except Exception as ex:  # pylint: disable=broad-except
+                        _LOGGER.warning("Cannot parse arming stream part (%s): %s", part_content_type, ex)
 
 
 class ISAPISetEventStateMutexError(Exception):

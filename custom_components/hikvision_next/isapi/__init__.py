@@ -10,5 +10,8 @@ from .models import (  # noqa: F401
     CameraStreamInfo,
     EventInfo,
     IPCamera,
+    Partition,
+    SecurityHostStatus,
     StorageInfo,
+    Zone,
 )
