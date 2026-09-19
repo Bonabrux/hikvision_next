@@ -48,6 +48,7 @@ from .models import (
     Zone,
 )
 from .multipart_stream import MultipartStreamParser, extract_boundary
+from .session_auth import SessionLoginAuth
 from .utils import bool_to_str, deep_get, json_bool, parse_isapi_response, str_to_bool
 
 Node = dict[str, Any]
@@ -977,11 +978,45 @@ class ISAPIClient:
                 self._auth_method = httpx.BasicAuth(self.username, self.password)
             elif "Digest" in www_authenticate:
                 self._auth_method = httpx.DigestAuth(self.username, self.password)
+        elif response.status_code == 200:
+            # No challenge needed. This also covers the case where a sessionLogin cookie was
+            # already issued earlier on this same client: httpx's own cookie jar (shared by
+            # self._session across all requests) keeps attaching it automatically even to
+            # this bare, auth-less probe, so the device answers 200 here without us ever
+            # setting a Cookie header ourselves. Cache a no-op auth either way, so future
+            # requests stop re-probing every single time -- if the cookie ever actually
+            # expires, request()'s reactive sessionLogin fallback (on a real 401) takes over.
+            self._auth_method = httpx.Auth()
 
         if not self._auth_method:
             _LOGGER.error("Authentication method not detected, %s", response.status_code)
             if response.headers:
                 _LOGGER.error("response.headers %s", response.headers)
+
+    async def _fallback_to_session_login(self, method: str, full_url: str, data: str | None) -> httpx.Response:
+        """Retry once via ISAPI "sessionLogin" after Basic/Digest is rejected outright.
+
+        Some devices advertise Basic/Digest but reject the plain configured password
+        regardless -- confirmed with an AX Hybrid PRO panel once it's been added to a
+        Hik-Connect account -- and require this hashed challenge-response flow instead. This
+        is deliberately reactive (tried only after a real request actually fails), never a
+        proactive probe: some devices (an NVR, in testing) advertise/parse a sessionLogin
+        capabilities response too but don't actually support logging in through it, so
+        preferring it up front broke a previously-working plain login for those.
+        """
+        _LOGGER.info(
+            "%s rejected %s; falling back to sessionLogin",
+            self.host,
+            type(self._auth_method).__name__,
+        )
+        self._auth_method = SessionLoginAuth(self.username, self.password)
+        return await self._session.request(
+            method,
+            full_url,
+            auth=self._auth_method,
+            data=data,
+            timeout=self.timeout,
+        )
 
     def get_isapi_url(self, relative_url: str) -> str:
         """Build full ISAPI URL."""
@@ -1007,6 +1042,8 @@ class ISAPIClient:
                 data=data,
                 timeout=self.timeout,
             )
+            if response.status_code == HTTPStatus.UNAUTHORIZED and not isinstance(self._auth_method, SessionLoginAuth):
+                response = await self._fallback_to_session_login(method, full_url, data)
             response.raise_for_status()
             result = parse_isapi_response(response, present)
             _LOGGER.debug("--- [%s] %s", method, full_url)
