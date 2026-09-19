@@ -13,7 +13,7 @@ from homeassistant.util import slugify
 
 from . import HikvisionConfigEntry
 from .const import CONF_ALARM_SERVER_HOST, SECONDARY_COORDINATOR, SECURITY_COORDINATOR, SECURITY_HOST_STATUS
-from .isapi import StorageInfo, Zone
+from .isapi import Peripheral, StorageInfo, Zone
 
 NOTIFICATION_HOST_KEYS = [
     "protocol_type",
@@ -53,6 +53,8 @@ async def async_setup_entry(
                 entities.append(ZoneSignalSensor(security_coordinator, zone))
             if zone.temperature is not None:
                 entities.append(ZoneTemperatureSensor(security_coordinator, zone))
+            if zone.humidity is not None:
+                entities.append(ZoneHumiditySensor(security_coordinator, zone))
 
     # Security control panel host-level status (backup battery, fault count, IP address)
     if device.device_info.is_security_panel:
@@ -61,6 +63,17 @@ async def async_setup_entry(
         entities.append(PanelBatterySensor(device, security_coordinator))
         entities.append(PanelBatteryVoltageSensor(device, security_coordinator))
         entities.append(PanelFaultCountSensor(device, security_coordinator))
+
+    # Security control panel peripherals (keypads, sirens, remotes, repeaters, extension
+    # modules) telemetry -- only for the fields each kind actually reports.
+    if security_coordinator:
+        for peripheral in device.peripherals:
+            if peripheral.charge_value is not None:
+                entities.append(PeripheralBatterySensor(security_coordinator, peripheral))
+            if peripheral.signal is not None:
+                entities.append(PeripheralSignalSensor(security_coordinator, peripheral))
+            if peripheral.temperature is not None:
+                entities.append(PeripheralTemperatureSensor(security_coordinator, peripheral))
 
     if entities:
         async_add_entities(entities, True)
@@ -139,9 +152,8 @@ class ZoneTelemetrySensor(CoordinatorEntity, SensorEntity):
         self._zone_data_key = BINARY_SENSOR_ENTITY_ID_FORMAT.format(zone.unique_id)
         self._attr_unique_id = f"{zone.unique_id}_{name_suffix}"
         self.entity_id = ENTITY_ID_FORMAT.format(slugify(self.unique_id))
-        self._attr_device_info = device.hass_device_info()
+        self._attr_device_info = device.zone_device_info(zone)
         self._attr_translation_key = f"zone_{name_suffix}"
-        self._attr_translation_placeholders = {"zone_name": zone.name}
 
     @property
     def native_value(self):
@@ -174,8 +186,14 @@ class ZoneSignalSensor(ZoneTelemetrySensor):
 
 
 class ZoneTemperatureSensor(ZoneTelemetrySensor):
-    """Zone detector reported temperature."""
+    """Zone detector reported temperature.
 
+    Unlike battery/signal (device-health diagnostics), this is an actual environmental
+    measurement -- shown as a regular sensor alongside the zone's own state instead of
+    tucked into the Diagnostic section.
+    """
+
+    _attr_entity_category = None
     _attr_device_class = SensorDeviceClass.TEMPERATURE
     _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
     _data_key = "temperature"
@@ -183,6 +201,19 @@ class ZoneTemperatureSensor(ZoneTelemetrySensor):
     def __init__(self, coordinator, zone: Zone) -> None:
         """Initialize."""
         super().__init__(coordinator, zone, "temperature")
+
+
+class ZoneHumiditySensor(ZoneTelemetrySensor):
+    """Zone humidity detector reading. A regular sensor, same reasoning as temperature above."""
+
+    _attr_entity_category = None
+    _attr_device_class = SensorDeviceClass.HUMIDITY
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _data_key = "humidity"
+
+    def __init__(self, coordinator, zone: Zone) -> None:
+        """Initialize."""
+        super().__init__(coordinator, zone, "humidity")
 
 
 class PanelHostStatusSensor(CoordinatorEntity, SensorEntity):
@@ -262,3 +293,62 @@ class PanelIPAddressSensor(SensorEntity):
         self.entity_id = ENTITY_ID_FORMAT.format(slugify(self.unique_id))
         self._attr_device_info = device.hass_device_info()
         self._attr_native_value = device.device_info.ip_address
+
+
+class PeripheralTelemetrySensor(CoordinatorEntity, SensorEntity):
+    """Base class for a security control panel peripheral's telemetry (battery/signal/temperature)."""
+
+    _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _data_key: str = None
+
+    def __init__(self, coordinator, peripheral: Peripheral, name_suffix: str) -> None:
+        """Initialize."""
+        super().__init__(coordinator)
+        device = coordinator.device
+        self._peripheral_unique_id = peripheral.unique_id
+        self._attr_unique_id = f"{peripheral.unique_id}_{name_suffix}"
+        self.entity_id = ENTITY_ID_FORMAT.format(slugify(self.unique_id))
+        self._attr_device_info = device.peripheral_device_info(peripheral)
+        self._attr_translation_key = f"peripheral_{name_suffix}"
+
+    @property
+    def native_value(self):
+        """Return the state of the sensor."""
+        data = self.coordinator.data.get(self._peripheral_unique_id)
+        return data.get(self._data_key) if data else None
+
+
+class PeripheralBatterySensor(PeripheralTelemetrySensor):
+    """Peripheral battery level."""
+
+    _attr_device_class = SensorDeviceClass.BATTERY
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _data_key = "charge_value"
+
+    def __init__(self, coordinator, peripheral: Peripheral) -> None:
+        """Initialize."""
+        super().__init__(coordinator, peripheral, "battery")
+
+
+class PeripheralSignalSensor(PeripheralTelemetrySensor):
+    """Peripheral RF signal quality."""
+
+    _attr_icon = "mdi:signal"
+    _data_key = "signal"
+
+    def __init__(self, coordinator, peripheral: Peripheral) -> None:
+        """Initialize."""
+        super().__init__(coordinator, peripheral, "signal")
+
+
+class PeripheralTemperatureSensor(PeripheralTelemetrySensor):
+    """Peripheral reported temperature."""
+
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _data_key = "temperature"
+
+    def __init__(self, coordinator, peripheral: Peripheral) -> None:
+        """Initialize."""
+        super().__init__(coordinator, peripheral, "temperature")

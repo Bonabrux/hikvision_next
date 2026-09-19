@@ -195,9 +195,31 @@ class SecurityCoordinator(DataUpdateCoordinator):
                     "charge_value": status.charge_value,
                     "signal": status.signal,
                     "temperature": status.temperature,
+                    "humidity": status.humidity,
+                    "alarm": status.alarm,
+                    "armed": status.armed,
+                    "is_via_repeater": status.is_via_repeater,
+                    "stay_away": status.stay_away,
                 }
         except Exception as ex:  # pylint: disable=broad-except
             self.device.handle_exception(ex, "Cannot fetch zone status")
+
+        try:
+            for status in await self.device.get_peripherals():
+                peripheral = self.device.get_peripheral_by_kind_and_id(status.kind, status.id)
+                if not peripheral:
+                    continue
+                data[peripheral.unique_id] = {
+                    "status": status.status,
+                    "tamper_evident": status.tamper_evident,
+                    "charge": status.charge,
+                    "charge_value": status.charge_value,
+                    "signal": status.signal,
+                    "temperature": status.temperature,
+                    "mains_power": status.mains_power,
+                }
+        except Exception as ex:  # pylint: disable=broad-except
+            self.device.handle_exception(ex, "Cannot fetch peripheral status")
 
         try:
             host_status = await self.device.get_host_status()

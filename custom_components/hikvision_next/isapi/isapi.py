@@ -27,6 +27,7 @@ from .const import (
     GET,
     MUTEX_ALTERNATE_ID,
     PARTITION_ARM_AWAY,
+    PERIPHERAL_ENDPOINTS,
     POST,
     PUT,
     STREAM_TYPE,
@@ -42,6 +43,7 @@ from .models import (
     ISAPIDeviceInfo,
     MutexIssue,
     Partition,
+    Peripheral,
     ProtocolsInfo,
     SecurityHostStatus,
     StorageInfo,
@@ -93,6 +95,7 @@ class ISAPIClient:
         self.protocols = ProtocolsInfo()
         self.partitions: list[Partition] = []
         self.zones: list[Zone] = []
+        self.peripherals: list[Peripheral] = []
         self.pending_initialization = False
 
     async def get_device_info(self):
@@ -137,6 +140,11 @@ class ISAPIClient:
 
             self.partitions = await self.get_partitions()
             self.zones = await self.get_zones()
+            # Peripherals are an enhancement on top of the core partition/zone support, gated
+            # behind a status/capabilities endpoint that may simply not exist on older
+            # firmware -- don't fail the whole device setup over it.
+            with suppress(Exception):
+                self.peripherals = await self.get_peripherals()
             return
 
         # Set if NVR based on whether more than 1 supported IP or analog cameras
@@ -537,6 +545,12 @@ class ISAPIClient:
                     charge_value=status_item.charge_value if status_item else None,
                     signal=status_item.signal if status_item else None,
                     temperature=status_item.temperature if status_item else None,
+                    humidity=status_item.humidity if status_item else None,
+                    zone_attrib=status_item.zone_attrib if status_item else None,
+                    is_via_repeater=status_item.is_via_repeater if status_item else None,
+                    stay_away=status_item.stay_away if status_item else None,
+                    model=status_item.model if status_item else None,
+                    version=status_item.version if status_item else None,
                 )
             )
         return zones
@@ -548,6 +562,8 @@ class ISAPIClient:
         for wrapper in self._security_cp_list(data):
             item = wrapper.get("Zone", {})
             magnet_open_status = item.get("magnetOpenStatus")
+            is_via_repeater = item.get("isViaRepeater")
+            stay_away = item.get("stayAway")
             zones.append(
                 Zone(
                     id=int(item.get("id")),
@@ -563,6 +579,12 @@ class ISAPIClient:
                     charge_value=item.get("chargeValue"),
                     signal=item.get("signal"),
                     temperature=item.get("temperature"),
+                    humidity=item.get("humidity"),
+                    zone_attrib=item.get("zoneAttrib"),
+                    is_via_repeater=json_bool(is_via_repeater) if is_via_repeater is not None else None,
+                    stay_away=json_bool(stay_away) if stay_away is not None else None,
+                    model=item.get("model"),
+                    version=item.get("version"),
                 )
             )
         return zones
@@ -572,6 +594,64 @@ class ISAPIClient:
         for zone in self.zones:
             if zone.id == zone_id:
                 return zone
+        return None
+
+    async def get_peripherals(self) -> list[Peripheral]:
+        """Get security control panel peripherals (keypads, sirens, remotes, repeaters, extension modules).
+
+        Each kind lives behind its own SecurityCP/status/* endpoint, gated by a matching
+        isSpt*Mod/isSptRemoteStatus flag -- not every panel model/firmware exposes every kind
+        (e.g. repeaters only exist on fully-wireless AX PRO panels, not the wired-first AX
+        Hybrid PRO), so unsupported kinds are skipped rather than probed.
+        """
+        status_cap = (await self._security_cp_request(GET, "SecurityCP/status/capabilities")).get(
+            "HostStatusCap", {}
+        )
+
+        peripherals = []
+        for capability_flag, url, list_key, item_key, kind in PERIPHERAL_ENDPOINTS:
+            if not json_bool(status_cap.get(capability_flag, False)):
+                continue
+            with suppress(Exception):
+                peripherals.extend(await self._get_peripheral_list(url, list_key, item_key, kind))
+        return peripherals
+
+    async def _get_peripheral_list(self, url: str, list_key: str, item_key: str, kind: str) -> list[Peripheral]:
+        """Fetch and parse one SecurityCP peripheral status endpoint."""
+        data = await self._security_cp_request(GET, url)
+        peripherals = []
+        for wrapper in data.get(list_key) or []:
+            item = wrapper.get(item_key, {})
+            if not item:
+                continue
+            charge_value = item.get("chargeValue")
+            signal = item.get("signal")
+            temperature = item.get("temperature")
+            peripheral_id = int(item.get("id"))
+            peripherals.append(
+                Peripheral(
+                    kind=kind,
+                    id=peripheral_id,
+                    name=item.get("name") or f"{item_key} {peripheral_id}",
+                    serial_no=item.get("seq"),
+                    model=item.get("model"),
+                    version=item.get("version"),
+                    status=item.get("status"),
+                    tamper_evident=json_bool(item["tamperEvident"]) if "tamperEvident" in item else None,
+                    charge=item.get("charge"),
+                    charge_value=int(charge_value) if charge_value is not None else None,
+                    signal=int(signal) if signal is not None else None,
+                    temperature=int(temperature) if temperature is not None else None,
+                    mains_power=json_bool(item["mainPowerSupply"]) if "mainPowerSupply" in item else None,
+                )
+            )
+        return peripherals
+
+    def get_peripheral_by_kind_and_id(self, kind: str, peripheral_id: int) -> Peripheral | None:
+        """Get peripheral object by kind and id."""
+        for peripheral in self.peripherals:
+            if peripheral.kind == kind and peripheral.id == peripheral_id:
+                return peripheral
         return None
 
     async def get_host_status(self) -> SecurityHostStatus:

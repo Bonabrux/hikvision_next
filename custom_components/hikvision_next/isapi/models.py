@@ -150,6 +150,41 @@ class Zone:
     charge_value: int | None = None  # remaining battery percentage, 0-100
     signal: int | None = None  # RF signal quality/strength
     temperature: int | None = None  # detector-reported temperature
+    humidity: int | None = None  # humidity detector reading, 10-90%
+    # "wired"/"wireless" -- the authoritative signal for whether this zone is a physical
+    # wired input on the panel/an expansion module (no battery/signal/repeater at all) vs an
+    # RF-paired wireless detector. Confirmed against real hardware: a purely mechanical wired
+    # zone (e.g. a hardwired panel input) never reports this field at all.
+    zone_attrib: str | None = None
+    is_via_repeater: bool | None = None  # wireless only: whether signal is relayed via a repeater
+    stay_away: bool | None = None  # whether stay-arming bypass is enabled for the zone
+    model: str | None = None  # detector model, e.g. "DS-PDMC-EG2"
+    version: str | None = None  # detector firmware version
+
+
+@dataclass
+class Peripheral:
+    """Holds info of a security control panel peripheral (keypad, siren, remote/keyfob,
+    repeater or extension module) -- anything that isn't a zone or partition but is a
+    distinct physical unit paired to the panel, reported by its own SecurityCP/status/*
+    endpoint. Not every field applies to every kind (e.g. remotes/keyfobs don't report
+    status/tamper/signal/temperature) -- absent fields stay None.
+    """
+
+    kind: str  # "keypad", "siren", "remote", "repeater", "extension_module"
+    id: int
+    name: str
+    unique_id: str = None
+    serial_no: str | None = None  # peripheral's own serial number ("seq")
+    model: str | None = None
+    version: str | None = None
+    status: str | None = None  # online/offline/notRelated/heartbeatAbnormal
+    tamper_evident: bool | None = None
+    charge: str | None = None  # "normal"/"lowPower"
+    charge_value: int | None = None  # remaining battery percentage, 0-100
+    signal: int | None = None  # RF signal quality/strength, 0-255
+    temperature: int | None = None
+    mains_power: bool | None = None  # external/AC power connected (wireless units)
 
 
 @dataclass

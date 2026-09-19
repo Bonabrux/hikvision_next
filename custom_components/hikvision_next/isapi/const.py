@@ -92,6 +92,32 @@ MUTEX_ALTERNATE_ID = {"motiondetection": "VMDHumanVehicle"}
 PARTITION_ARM_STAY: Final = "stay"
 PARTITION_ARM_AWAY: Final = "away"
 
+# Security control panel peripheral kinds (Peripheral.kind), and the SecurityCP/status/*
+# endpoint + list/item JSON keys used to fetch each one. Gated behind the matching
+# isSpt*Mod/isSptRemoteStatus flag from SecurityCP/status/capabilities, since not every
+# panel model/firmware exposes every kind (e.g. repeaters only exist on fully-wireless
+# AX PRO panels, not the wired-first AX Hybrid PRO).
+PERIPHERAL_KEYPAD: Final = "keypad"
+PERIPHERAL_EXTENSION_MODULE: Final = "extension_module"
+PERIPHERAL_SIREN: Final = "siren"
+PERIPHERAL_REMOTE: Final = "remote"
+PERIPHERAL_REPEATER: Final = "repeater"
+
+# (capability flag, status endpoint, response list key, response item key, kind)
+PERIPHERAL_ENDPOINTS = [
+    ("isSptKeypadMod", "SecurityCP/status/keypadStatus", "KeypadList", "Keypad", PERIPHERAL_KEYPAD),
+    (
+        "isSptExtensionModuleMod",
+        "SecurityCP/status/extensionModuleStatus",
+        "ExtensionList",
+        "ExtensionModule",
+        PERIPHERAL_EXTENSION_MODULE,
+    ),
+    ("isSptSirenMod", "SecurityCP/status/sirenStatus", "SirenList", "Siren", PERIPHERAL_SIREN),
+    ("isSptRemoteStatus", "SecurityCP/status/remoteStatus", "RemoteList", "Remote", PERIPHERAL_REMOTE),
+    ("isSptRepeaterMod", "SecurityCP/status/repeaterStatus", "RepeaterList", "Repeater", PERIPHERAL_REPEATER),
+]
+
 # Generic zone detector categories, mapped from SecurityCP zone "detectorType" values.
 # Kept HA-agnostic here; the integration layer maps these to BinarySensorDeviceClass.
 ZONE_CATEGORY_DOOR: Final = "door"

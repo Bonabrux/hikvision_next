@@ -11,6 +11,7 @@ from .models import (  # noqa: F401
     EventInfo,
     IPCamera,
     Partition,
+    Peripheral,
     SecurityHostStatus,
     StorageInfo,
     Zone,

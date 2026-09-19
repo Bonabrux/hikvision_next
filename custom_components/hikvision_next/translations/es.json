@@ -61,6 +61,36 @@
       },
       "panel_tamper": {
         "name": "Sabotaje"
+      },
+      "peripheral_tamper": {
+        "name": "Sabotaje"
+      },
+      "peripheral_online": {
+        "name": "En línea"
+      },
+      "peripheral_battery_low": {
+        "name": "Batería baja"
+      },
+      "peripheral_mains_power": {
+        "name": "Alimentación 220V"
+      },
+      "zone_tamper": {
+        "name": "Sabotaje"
+      },
+      "zone_bypassed": {
+        "name": "Anulada"
+      },
+      "zone_armed": {
+        "name": "Armada"
+      },
+      "zone_alarm": {
+        "name": "Alarma"
+      },
+      "zone_stay_away": {
+        "name": "Anulación en armado parcial"
+      },
+      "zone_is_via_repeater": {
+        "name": "Vía repetidor"
       }
     },
     "switch": {
@@ -126,13 +156,16 @@
         "name": "Ruta del host de notificaciones"
       },
       "zone_battery": {
-        "name": "Batería {zone_name}"
+        "name": "Batería"
       },
       "zone_signal": {
-        "name": "Señal {zone_name}"
+        "name": "Señal"
       },
       "zone_temperature": {
-        "name": "Temperatura {zone_name}"
+        "name": "Temperatura"
+      },
+      "zone_humidity": {
+        "name": "Humedad"
       },
       "panel_battery": {
         "name": "Batería"
@@ -145,6 +178,15 @@
       },
       "panel_ip_address": {
         "name": "Dirección IP"
+      },
+      "peripheral_battery": {
+        "name": "Batería"
+      },
+      "peripheral_signal": {
+        "name": "Señal"
+      },
+      "peripheral_temperature": {
+        "name": "Temperatura"
       }
     },
     "image": {

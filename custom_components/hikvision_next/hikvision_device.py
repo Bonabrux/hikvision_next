@@ -33,6 +33,8 @@ from .isapi import (
     ISAPIClient,
     ISAPIForbiddenError,
     ISAPIUnauthorizedError,
+    Peripheral,
+    Zone,
 )
 from .isapi.const import EVENT_IO
 
@@ -114,12 +116,27 @@ class HikvisionDevice(ISAPIClient):
             await coordinator.async_config_entry_first_refresh()
 
     def _init_security_entities(self):
-        """Compute unique_id for each security control panel partition and zone."""
+        """Compute unique_id for each security control panel partition, zone and peripheral."""
         serial = slugify(self.device_info.serial_no.lower())
         for partition in self.partitions:
             partition.unique_id = f"{serial}_partition_{partition.id}"
         for zone in self.zones:
             zone.unique_id = f"{serial}_zone_{zone.id}"
+        for peripheral in self.peripherals:
+            peripheral.unique_id = f"{serial}_{peripheral.kind}_{peripheral.id}"
+
+    def _via_base_device_kwarg(self) -> dict:
+        """Build the via_device/via_device_id kwarg pointing at this integration's base device."""
+        if _SUPPORTS_VIA_DEVICE_ID:
+            registry = dr.async_get(self.hass)
+            if _SUPPORTS_DEVICE_BY_IDENTIFIER:
+                base_device = registry.async_get_device_by_identifier(
+                    (DOMAIN, self.device_info.serial_no), self.entry.entry_id
+                )
+            else:
+                base_device = registry.async_get_device(identifiers={(DOMAIN, self.device_info.serial_no)})
+            return {"via_device_id": base_device.id if base_device else None}
+        return {"via_device": (DOMAIN, self.device_info.serial_no)}
 
     def hass_device_info(self, camera_id: int = 0) -> DeviceInfo:
         """Return Home Assistant entity device information."""
@@ -136,19 +153,9 @@ class HikvisionDevice(ISAPIClient):
             camera_info = self.get_camera_by_id(camera_id)
             is_ip_camera = isinstance(camera_info, IPCamera)
 
-            via_device_kwarg = {}
-            if self.device_info.is_nvr:
-                if _SUPPORTS_VIA_DEVICE_ID:
-                    registry = dr.async_get(self.hass)
-                    if _SUPPORTS_DEVICE_BY_IDENTIFIER:
-                        nvr_device = registry.async_get_device_by_identifier(
-                            (DOMAIN, self.device_info.serial_no), self.entry.entry_id
-                        )
-                    else:
-                        nvr_device = registry.async_get_device(identifiers={(DOMAIN, self.device_info.serial_no)})
-                    via_device_kwarg["via_device_id"] = nvr_device.id if nvr_device else None
-                else:
-                    via_device_kwarg["via_device"] = (DOMAIN, self.device_info.serial_no)
+            # Standalone IP cameras (not behind an NVR) already *are* the base device --
+            # only actual NVR channels are sub-devices of it.
+            via_device_kwarg = self._via_base_device_kwarg() if self.device_info.is_nvr else {}
 
             return DeviceInfo(
                 manufacturer=self.device_info.manufacturer,
@@ -158,6 +165,37 @@ class HikvisionDevice(ISAPIClient):
                 sw_version=camera_info.firmware if is_ip_camera else "Unknown",
                 **via_device_kwarg,
             )
+
+    def zone_device_info(self, zone: Zone) -> DeviceInfo:
+        """Return Home Assistant device information for a security control panel zone.
+
+        Each zone (door/window contact, motion detector, etc.) is a distinct physical device
+        wired or paired to the panel -- modeling it as its own HA device (rather than a bag of
+        entities on the panel's own device) lets it be assigned to its own Area, and groups its
+        battery/signal/temperature diagnostics on its own device page instead of the panel's.
+        """
+        return DeviceInfo(
+            manufacturer=self.device_info.manufacturer,
+            identifiers={(DOMAIN, zone.unique_id)},
+            name=zone.name,
+            model=zone.model or zone.detector_type,
+            sw_version=zone.version,
+            **self._via_base_device_kwarg(),
+        )
+
+    def peripheral_device_info(self, peripheral: Peripheral) -> DeviceInfo:
+        """Return Home Assistant device information for a security control panel peripheral
+        (keypad, siren, remote/keyfob, repeater or extension module) -- each is its own
+        physical unit paired to the panel, same reasoning as zone_device_info().
+        """
+        return DeviceInfo(
+            manufacturer=self.device_info.manufacturer,
+            identifiers={(DOMAIN, peripheral.unique_id)},
+            name=peripheral.name,
+            model=peripheral.model,
+            sw_version=peripheral.version,
+            **self._via_base_device_kwarg(),
+        )
 
     def get_device_event_capabilities(
         self,
