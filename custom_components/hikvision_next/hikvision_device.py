@@ -37,6 +37,7 @@ from .isapi import (
     Zone,
 )
 from .isapi.const import EVENT_IO
+from .isapi.detector_catalog import friendly_zone_model
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -178,8 +179,9 @@ class HikvisionDevice(ISAPIClient):
             manufacturer=self.device_info.manufacturer,
             identifiers={(DOMAIN, zone.unique_id)},
             name=zone.name,
-            model=zone.model or zone.detector_type,
+            model=friendly_zone_model(zone.model, zone.detector_type, zone.zone_attrib),
             sw_version=zone.version,
+            serial_number=zone.serial_no,
             **self._via_base_device_kwarg(),
         )
 
@@ -194,6 +196,7 @@ class HikvisionDevice(ISAPIClient):
             name=peripheral.name,
             model=peripheral.model,
             sw_version=peripheral.version,
+            serial_number=peripheral.serial_no,
             **self._via_base_device_kwarg(),
         )
 

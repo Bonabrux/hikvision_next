@@ -160,6 +160,11 @@ class Zone:
     stay_away: bool | None = None  # whether stay-arming bypass is enabled for the zone
     model: str | None = None  # detector model, e.g. "DS-PDMC-EG2"
     version: str | None = None  # detector firmware version
+    # Detector's own serial number ("detectorSeq") -- only reported by the Configuration
+    # endpoint (not status), and only for wireless zones with a paired physical detector.
+    serial_no: str | None = None
+    chime_enabled: bool | None = None  # whether a doorbell chime sounds when the zone opens
+    silent_enabled: bool | None = None  # whether the siren is muted for this zone specifically
 
 
 @dataclass

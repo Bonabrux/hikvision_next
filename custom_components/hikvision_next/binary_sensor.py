@@ -44,7 +44,6 @@ async def async_setup_entry(
         # real hardware), unlike battery/signal/temperature/is_via_repeater which are
         # wireless-only -- so, unlike those, they're created unconditionally here.
         entities.append(ZoneTamperSensor(device, coordinator, zone))
-        entities.append(ZoneBypassedSensor(device, coordinator, zone))
         entities.append(ZoneArmedSensor(device, coordinator, zone))
         entities.append(ZoneAlarmSensor(device, coordinator, zone))
         entities.append(ZoneStayAwaySensor(device, coordinator, zone))
@@ -168,17 +167,6 @@ class ZoneTamperSensor(ZoneDiagnosticBinarySensor):
     def __init__(self, device: HikvisionDevice, coordinator, zone: Zone) -> None:
         """Initialize."""
         super().__init__(device, coordinator, zone, "tamper")
-
-
-class ZoneBypassedSensor(ZoneDiagnosticBinarySensor):
-    """Whether the zone is currently bypassed (excluded from arming)."""
-
-    _attr_icon = "mdi:shield-off-outline"
-    _data_key = "bypassed"
-
-    def __init__(self, device: HikvisionDevice, coordinator, zone: Zone) -> None:
-        """Initialize."""
-        super().__init__(device, coordinator, zone, "bypassed")
 
 
 class ZoneArmedSensor(ZoneDiagnosticBinarySensor):

@@ -77,9 +77,6 @@
       "zone_tamper": {
         "name": "Sabotaje"
       },
-      "zone_bypassed": {
-        "name": "Anulada"
-      },
       "zone_armed": {
         "name": "Armada"
       },
@@ -99,6 +96,15 @@
       },
       "holiday_mode": {
         "name": "Modo vacaciones"
+      },
+      "zone_bypassed": {
+        "name": "Anulada"
+      },
+      "zone_chime": {
+        "name": "Timbre"
+      },
+      "zone_silent": {
+        "name": "Silenciosa"
       },
       "motiondetection": {
         "name": "Detección de movimiento"

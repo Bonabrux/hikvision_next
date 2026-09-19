@@ -432,12 +432,12 @@ class ISAPIClient:
     # only returns JSON: it does not have a usable default XML representation, so all
     # SecurityCP requests explicitly ask for format=json and parse the body as JSON.
 
-    async def _security_cp_request(self, method: str, url: str, query: str = "") -> dict:
+    async def _security_cp_request(self, method: str, url: str, query: str = "", data: str | None = None) -> dict:
         """Send a request to a SecurityCP/* endpoint and parse its JSON response."""
         separator = "&" if "?" in url else "?"
         extra = f"&{query}" if query else ""
         full_url = f"{url}{separator}format=json{extra}"
-        response = await self.request(method, full_url, present="json")
+        response = await self.request(method, full_url, present="json", data=data)
         return json.loads(response) if response else {}
 
     @staticmethod
@@ -551,6 +551,12 @@ class ISAPIClient:
                     stay_away=status_item.stay_away if status_item else None,
                     model=status_item.model if status_item else None,
                     version=status_item.version if status_item else None,
+                    # Only the Configuration endpoint reports the detector's own serial
+                    # number ("detectorSeq") -- status/zones doesn't have it at all.
+                    serial_no=item.get("detectorSeq"),
+                    # Likewise, only Configuration reports these two (status/zones doesn't).
+                    chime_enabled=json_bool(item["chimeEnabled"]) if "chimeEnabled" in item else None,
+                    silent_enabled=json_bool(item["silentEnabled"]) if "silentEnabled" in item else None,
                 )
             )
         return zones
@@ -595,6 +601,32 @@ class ISAPIClient:
             if zone.id == zone_id:
                 return zone
         return None
+
+    async def bypass_zone(self, zone_id: int) -> None:
+        """Bypass a zone (excluded from the next arming cycle)."""
+        await self._security_cp_request(PUT, f"SecurityCP/control/bypass/{zone_id}")
+
+    async def recover_bypass_zone(self, zone_id: int) -> None:
+        """Recover (un-bypass) a zone."""
+        await self._security_cp_request(PUT, f"SecurityCP/control/bypassRecover/{zone_id}")
+
+    async def set_zone_parameter(self, zone_id: int, **fields) -> None:
+        """Set one or more SecurityCP/Configuration/zones parameters for a zone.
+
+        Confirmed against the ISAPI reference that this endpoint's request fields are all
+        marked optional except "id" -- a partial update, so only the given fields are sent
+        rather than round-tripping the zone's entire (much larger) configuration object.
+        """
+        body = json.dumps({"Zone": {"id": zone_id, **fields}})
+        await self._security_cp_request(PUT, f"SecurityCP/Configuration/zones/{zone_id}", data=body)
+
+    async def set_zone_chime_enabled(self, zone_id: int, enabled: bool) -> None:
+        """Enable or disable the doorbell chime for a zone."""
+        await self.set_zone_parameter(zone_id, chimeEnabled=enabled)
+
+    async def set_zone_silent_enabled(self, zone_id: int, enabled: bool) -> None:
+        """Enable or disable muting the siren for a zone."""
+        await self.set_zone_parameter(zone_id, silentEnabled=enabled)
 
     async def get_peripherals(self) -> list[Peripheral]:
         """Get security control panel peripherals (keypads, sirens, remotes, repeaters, extension modules).
